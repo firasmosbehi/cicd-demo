@@ -1,0 +1,205 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  # Code Quality Checks
+  code-quality:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+        cache: 'npm'
+    
+    - name: Install dependencies
+      run: npm ci
+    
+    - name: Run ESLint
+      run: npm run lint
+    
+    - name: Type checking
+      run: npx tsc --noEmit
+
+  # Security Scanning (SAST)
+  security-sast:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Run Snyk to check for vulnerabilities
+      uses: snyk/actions/node@master
+      env:
+        SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+      with:
+        args: --severity-threshold=high
+    
+    - name: Run CodeQL Analysis
+      uses: github/codeql-action/analyze@v2
+      with:
+        languages: javascript-typescript
+
+  # Unit Tests
+  unit-tests:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: [16, 18, 20]
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Use Node.js ${{ matrix.node-version }}
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ matrix.node-version }}
+        cache: 'npm'
+    
+    - name: Install dependencies
+      run: npm ci
+    
+    - name: Run unit tests
+      run: npm run test:unit
+    
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v3
+      with:
+        file: ./coverage/lcov.info
+
+  # Integration Tests
+  integration-tests:
+    runs-on: ubuntu-latest
+    services:
+      mongodb:
+        image: mongo:5.0
+        ports:
+          - 27017:27017
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+        cache: 'npm'
+    
+    - name: Install dependencies
+      run: npm ci
+    
+    - name: Run integration tests
+      run: npm run test:integration
+      env:
+        MONGODB_URI: mongodb://localhost:27017/testdb
+
+  # Container Image Building
+  build-and-push:
+    runs-on: ubuntu-latest
+    needs: [code-quality, unit-tests, integration-tests]
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop'
+    
+    strategy:
+      matrix:
+        service: [user-service, order-service, product-service, notification-service, analytics-service]
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+    
+    - name: Login to DockerHub
+      uses: docker/login-action@v3
+      with:
+        username: ${{ secrets.DOCKER_USERNAME }}
+        password: ${{ secrets.DOCKER_PASSWORD }}
+    
+    - name: Extract metadata
+      id: meta
+      uses: docker/metadata-action@v5
+      with:
+        images: ${{ secrets.DOCKER_USERNAME }}/${{ matrix.service }}
+        tags: |
+          type=ref,event=branch
+          type=sha,prefix={{branch}}-
+          type=raw,value=latest,enable={{is_default_branch}}
+    
+    - name: Build and push Docker image
+      uses: docker/build-push-action@v5
+      with:
+        context: ./services/${{ matrix.service }}
+        push: true
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+
+  # Security Scanning (DAST)
+  security-dast:
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    if: github.ref == 'refs/heads/main'
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Run OWASP ZAP scan
+      uses: zaproxy/action-full-scan@v0.8.0
+      with:
+        target: 'http://localhost:3001'  # Adjust URL as needed
+        cmd_options: '-a'
+        allow_issue_writing: true
+
+  # Canary Deployment
+  canary-deployment:
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    if: github.ref == 'refs/heads/main'
+    environment: staging
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Deploy canary release
+      run: |
+        echo "Deploying canary release to staging environment"
+        # Add kubectl commands for canary deployment
+        # kubectl apply -f k8s/canary-deployment.yaml
+        
+    - name: Run smoke tests
+      run: |
+        echo "Running smoke tests against canary deployment"
+        # Add smoke test commands
+        
+    - name: Monitor canary health
+      run: |
+        chmod +x scripts/health-check.sh
+        ./scripts/health-check.sh user-service user-service-canary staging || exit 1
+
+  # Production Deployment
+  production-deployment:
+    runs-on: ubuntu-latest
+    needs: canary-deployment
+    if: github.ref == 'refs/heads/main'
+    environment: production
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Blue-green deployment
+      run: |
+        echo "Performing blue-green deployment to production"
+        # Add blue-green deployment logic
+        # kubectl apply -f k8s/production-deployment.yaml
+        
+    - name: Run end-to-end tests
+      run: |
+        echo "Running end-to-end tests in production"
+        # Add e2e test commands
+        
+    - name: Health check and rollback setup
+      run: |
+        echo "Setting up health monitoring and rollback triggers"
+        # Add monitoring setup

@@ -1,0 +1,14 @@
+# Security Configuration Files
+
+## SAST Configuration (.snyk)
+{
+  "ignore": [
+    "SNYK-JS-LODASH-1018905": {
+      "reason": "Low severity prototype pollution in dev dependency",
+      "expires": "2024-12-31"
+    }
+  ],
+  "exclude": [
+    "tests/"
+  ]
+}
