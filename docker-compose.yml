@@ -1,0 +1,184 @@
+version: '3.8'
+
+services:
+  # MongoDB Database
+  mongodb:
+    image: mongo:6.0
+    container_name: cicd_mongodb
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: admin
+      MONGO_INITDB_ROOT_PASSWORD: password
+      MONGO_INITDB_DATABASE: cicdpipeline
+    volumes:
+      - mongodb_data:/data/db
+      - ./scripts/mongo-init.js:/docker-entrypoint-initdb.d/mongo-init.js:ro
+    networks:
+      - cicd_network
+
+  # Redis Cache
+  redis:
+    image: redis:7-alpine
+    container_name: cicd_redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - cicd_network
+
+  # User Service
+  user-service:
+    build:
+      context: ./services/user-service
+      dockerfile: Dockerfile
+    container_name: cicd_user_service
+    restart: unless-stopped
+    ports:
+      - "3001:3001"
+    environment:
+      - PORT=3001
+      - MONGODB_URI=mongodb://admin:password@mongodb:27017/userdb?authSource=admin
+      - JWT_SECRET=your-jwt-secret-key-change-in-production
+      - JWT_REFRESH_SECRET=your-refresh-secret-key-change-in-production
+      - NODE_ENV=development
+    depends_on:
+      - mongodb
+    networks:
+      - cicd_network
+
+  # Order Service
+  order-service:
+    build:
+      context: ./services/order-service
+      dockerfile: Dockerfile
+    container_name: cicd_order_service
+    restart: unless-stopped
+    ports:
+      - "3002:3002"
+    environment:
+      - PORT=3002
+      - MONGODB_URI=mongodb://admin:password@mongodb:27017/orderdb?authSource=admin
+      - JWT_SECRET=your-jwt-secret-key-change-in-production
+      - NODE_ENV=development
+    depends_on:
+      - mongodb
+    networks:
+      - cicd_network
+
+  # Product Service
+  product-service:
+    build:
+      context: ./services/product-service
+      dockerfile: Dockerfile
+    container_name: cicd_product_service
+    restart: unless-stopped
+    ports:
+      - "3003:3003"
+    environment:
+      - PORT=3003
+      - MONGODB_URI=mongodb://admin:password@mongodb:27017/productdb?authSource=admin
+      - JWT_SECRET=your-jwt-secret-key-change-in-production
+      - NODE_ENV=development
+    depends_on:
+      - mongodb
+    networks:
+      - cicd_network
+
+  # Notification Service
+  notification-service:
+    build:
+      context: ./services/notification-service
+      dockerfile: Dockerfile
+    container_name: cicd_notification_service
+    restart: unless-stopped
+    ports:
+      - "3004:3002"
+    environment:
+      - PORT=3002
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - SMTP_HOST=smtp.gmail.com
+      - SMTP_PORT=587
+      - TWILIO_ACCOUNT_SID=dummy-sid-for-local-testing
+      - TWILIO_AUTH_TOKEN=dummy-token-for-local-testing
+    depends_on:
+      - redis
+    networks:
+      - cicd_network
+
+  # Analytics Service
+  analytics-service:
+    build:
+      context: ./services/analytics-service
+      dockerfile: Dockerfile
+    container_name: cicd_analytics_service
+    restart: unless-stopped
+    ports:
+      - "3005:3003"
+    environment:
+      - PORT=3003
+      - MONGODB_URI=mongodb://admin:password@mongodb:27017/analytics?authSource=admin
+      - REDIS_ADDR=redis:6379
+      - PROMETHEUS_ENABLED=true
+    depends_on:
+      - mongodb
+      - redis
+    networks:
+      - cicd_network
+
+  # Frontend Client
+  frontend-client:
+    build:
+      context: ./services/frontend-client
+      dockerfile: Dockerfile
+      args:
+        - REACT_APP_API_BASE_URL=http://localhost:3001
+        - REACT_APP_ORDER_SERVICE_URL=http://localhost:3002
+        - REACT_APP_PRODUCT_SERVICE_URL=http://localhost:3003
+        - REACT_APP_NOTIFICATION_SERVICE_URL=http://localhost:3004
+        - REACT_APP_ANALYTICS_SERVICE_URL=http://localhost:3005
+    container_name: cicd_frontend_client
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    depends_on:
+      - user-service
+      - order-service
+      - product-service
+      - notification-service
+      - analytics-service
+    networks:
+      - cicd_network
+
+  # Prometheus Monitoring
+  prometheus:
+    image: prom/prometheus:v2.40.0
+    container_name: cicd_prometheus
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./configs/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=200h'
+      - '--web.enable-lifecycle'
+    networks:
+      - cicd_network
+
+networks:
+  cicd_network:
+    driver: bridge
+
+volumes:
+  mongodb_data:
+  redis_data:
+  prometheus_data:

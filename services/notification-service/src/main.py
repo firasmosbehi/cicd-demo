@@ -5,6 +5,8 @@ import json
 import asyncio
 from typing import List, Dict
 import os
+import logging
+from src.providers import EnhancedNotificationService
 
 app = FastAPI(title="Notification Service", version="1.0.0")
 
@@ -17,9 +19,15 @@ redis_client = redis.Redis(
 
 class Notification(BaseModel):
     user_id: str
+    recipient: str  # email address, phone number, or device token
     message: str
-    type: str  # email, sms, push
+    type: str  # email, sms, push, slack
     priority: str = "normal"  # low, normal, high
+    subject: str = None  # For email
+    title: str = None    # For push notifications
+    html_body: str = None  # For email
+    data: Dict = None    # For push notifications
+    username: str = None # For Slack
 
 class NotificationResponse(BaseModel):
     id: str
@@ -55,20 +63,51 @@ async def send_notification(notification: Notification, background_tasks: Backgr
         timestamp=str(asyncio.get_event_loop().time())
     )
 
+# Initialize enhanced notification service
+notification_service = EnhancedNotificationService()
+
 async def process_notification(notification_id: str, notification_data: Dict):
-    """Process notification based on type"""
+    """Process notification using enhanced providers"""
     notification_type = notification_data['type']
     
     try:
+        # Prepare content based on notification type
+        content = {}
+        
         if notification_type == 'email':
-            await send_email(notification_data)
+            content = {
+                "subject": notification_data.get('subject', 'Notification'),
+                "body": notification_data['message'],
+                "html_body": notification_data.get('html_body')
+            }
         elif notification_type == 'sms':
-            await send_sms(notification_data)
+            content = {
+                "message": notification_data['message']
+            }
         elif notification_type == 'push':
-            await send_push_notification(notification_data)
+            content = {
+                "title": notification_data.get('title', 'Notification'),
+                "body": notification_data['message'],
+                "data": notification_data.get('data', {})
+            }
+        elif notification_type == 'slack':
+            content = {
+                "message": notification_data['message'],
+                "username": notification_data.get('username', 'Notification Bot')
+            }
+        
+        # Send notification using enhanced service
+        success = await notification_service.send_notification(
+            notification_type,
+            notification_data['recipient'],  # Assuming we add recipient field
+            content
+        )
         
         # Update status
-        notification_data['status'] = 'sent'
+        notification_data['status'] = 'sent' if success else 'failed'
+        if not success:
+            notification_data['error'] = 'Provider failed to send notification'
+            
         redis_client.setex(
             f"notification:{notification_id}",
             3600,

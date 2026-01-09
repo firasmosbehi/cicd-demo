@@ -1,0 +1,33 @@
+// GetUserSessions returns user session data
+func (h *AnalyticsHandler) GetUserSessions(c *gin.Context) {
+	userId := c.Query("user_id")
+	limitStr := c.Query("limit")
+	limit := 50
+	if limitStr != "" {
+		if parsedLimit, err := strconv.Atoi(limitStr); err == nil && parsedLimit > 0 {
+			limit = parsedLimit
+		}
+	}
+
+	filter := bson.M{}
+	if userId != "" {
+		filter["user_id"] = userId
+	}
+
+	opts := options.Find().SetSort(bson.D{{"start_time", -1}}).SetLimit(int64(limit))
+
+	cursor, err := h.db.Collection("sessions").Find(context.Background(), filter, opts)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch sessions"})
+		return
+	}
+	defer cursor.Close(context.Background())
+
+	var sessions []models.UserSession
+	if err = cursor.All(context.Background(), &sessions); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to decode sessions"})
+		return
+	}
+
+	c.JSON(http.StatusOK, sessions)
+}
